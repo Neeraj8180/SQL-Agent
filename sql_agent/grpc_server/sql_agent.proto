@@ -1,0 +1,75 @@
+// SQL Agent gRPC interface (phase 1).
+//
+// Design notes:
+//   - The LLM never emits SQL. `parameters_json` is the serialized form of
+//     the pydantic `FetchParams` model (see sql_agent/models/tool_schemas.py).
+//   - `GenerateSQL` currently invokes the full pipeline and strips the
+//     response down to planning fields. Phase 2 will add a plan-only
+//     subgraph to avoid the DB roundtrip.
+//   - `rows_json` is a JSON array of row dicts (dates ISO-serialized) rather
+//     than a native repeated message so that the wire format is stable
+//     regardless of column schema drift.
+
+syntax = "proto3";
+
+package sql_agent.v1;
+
+service SqlAgent {
+  // Produce a structured query plan for a natural-language question.
+  rpc GenerateSQL(GenerateSQLRequest) returns (GenerateSQLResponse);
+
+  // Execute a natural-language query end-to-end and return plan + data.
+  rpc ExecuteSQL(ExecuteSQLRequest) returns (ExecuteSQLResponse);
+
+  // Liveness / readiness probe for Kubernetes.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message ChatMessageProto {
+  string role = 1;      // "user" | "assistant" | "system"
+  string content = 2;
+}
+
+message GenerateSQLRequest {
+  string query = 1;
+  string session_id = 2;                          // optional; server generates if empty
+  string memory_summary = 3;                      // optional
+  repeated ChatMessageProto prior_messages = 4;   // optional
+}
+
+message GenerateSQLResponse {
+  string tool_used = 1;
+  string parameters_json = 2;                     // JSON of FetchParams
+  string param_reasoning = 3;
+  string error = 4;
+  double latency_ms = 5;
+  string session_id = 6;                          // echoed back (generated if not supplied)
+}
+
+message ExecuteSQLRequest {
+  string query = 1;
+  string session_id = 2;
+  string memory_summary = 3;
+  repeated ChatMessageProto prior_messages = 4;
+}
+
+message ExecuteSQLResponse {
+  string tool_used = 1;
+  string parameters_json = 2;
+  string param_reasoning = 3;
+  int32 row_count = 4;
+  string rows_json = 5;                           // JSON array of row dicts
+  string insights = 6;
+  string visualization_b64 = 7;                   // base64 PNG, may be empty
+  string error = 8;
+  bool success = 9;
+  double latency_ms = 10;
+  string session_id = 11;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;                              // "SERVING" | "NOT_SERVING"
+  string version = 2;                             // sql_agent.__version__
+}

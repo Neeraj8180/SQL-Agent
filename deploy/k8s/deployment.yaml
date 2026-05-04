@@ -1,0 +1,138 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sql-agent
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/component: server
+spec:
+  # min replicas; HorizontalPodAutoscaler in hpa.yaml takes over from here.
+  # HPA honours this value as the floor.
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sql-agent
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sql-agent
+        app.kubernetes.io/component: server
+      annotations:
+        # Prometheus Operator-less auto-scrape (works with kube-prometheus
+        # scrape-via-annotations pattern).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Stateless workload; any pod can serve any request. Anti-affinity
+      # spreads replicas across nodes when available.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: sql-agent
+
+      # Non-root user baked into the image (UID 10001); enforce here too.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: sql-agent
+          image: sql-agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: sql-agent-config
+            - secretRef:
+                name: sql-agent-secrets
+                optional: true   # secret may not exist in demo clusters
+
+          resources:
+            # Medium tier (local-LLM-ready). For the minimal image with
+            # OpenAI, these are safely oversized — scheduler will pack pods
+            # efficiently regardless.
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+
+          # gRPC-native probes (K8s 1.24+). Targets the standard
+          # grpc.health.v1.Health service registered by the container.
+          livenessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+
+          # Give pods up to 30s to drain in-flight RPCs before SIGKILL.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # python bytecode cache + FAISS files
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            - name: agent-data
+              mountPath: /app/sql_agent/sqlite_db
+            - name: agent-logs
+              mountPath: /app/logs
+
+      # Phase 8.9: both volumes are emptyDir. A ReadWriteOnce PVC on a
+      # multi-replica Deployment is an anti-pattern (only one pod can
+      # mount it). In this topology:
+      #   * `agent-data` holds the seeded demo DB + FAISS memory. Reads
+      #     from each pod's local copy are cheap; writes are disabled via
+      #     READ_ONLY_MEMORY=true (ConfigMap) so divergence never happens.
+      #   * `agent-logs` is ephemeral per-pod (structured JSON logs ship
+      #     to the log collector via stdout anyway).
+      # For persistent memory writes, deploy the StatefulSet writer
+      # (`statefulset-writer.yaml`) which has its own RWO PVC.
+      volumes:
+        - name: agent-data
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: agent-logs
+          emptyDir:
+            sizeLimit: 1Gi
+
+      terminationGracePeriodSeconds: 45

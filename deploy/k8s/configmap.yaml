@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sql-agent-config
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: sql-agent
+data:
+  # ---- LLM provider ----
+  # Change to "openai" or "hf" in overlay; default is mock so the cluster
+  # starts up with zero secrets required.
+  LLM_PROVIDER: "mock"
+  EMBEDDING_PROVIDER: "mock"
+
+  # ---- Routing (Phase 3) ----
+  LLM_ROUTING_ENABLED: "false"
+  LLM_ROUTING_WEIGHTS: "openai:100"
+
+  # ---- Tracking (Phase 4) ----
+  TRACKING_ENABLED: "true"
+  TRACKING_BACKEND: "file"
+
+  # ---- Observability (Phase 5) ----
+  LOG_JSON: "true"
+  METRICS_ENABLED: "true"
+  METRICS_PORT: "9090"
+  METRICS_ADDR: "0.0.0.0"
+
+  # ---- Containerization (Phase 6) ----
+  # Leave off in production: real deployments mount a pre-seeded DB or use
+  # a real DATABASE_URL. Override to "true" for demo clusters.
+  SEED_DEMO_ON_BOOT: "false"
+
+  # ---- Multi-replica correctness (Phase 7) ----
+  # All Deployment replicas run read-only: they consult FAISS memory but
+  # never write to it (keeps pod-local FAISS state from diverging). A
+  # designated writer pod (e.g. StatefulSet replica-0 in a future phase)
+  # would override this to "false".
+  READ_ONLY_MEMORY: "true"
+
+  # ---- gRPC ----
+  GRPC_PORT: "50051"
+
+  # ---- Logging ----
+  LOG_LEVEL: "INFO"

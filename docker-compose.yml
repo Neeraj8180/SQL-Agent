@@ -1,0 +1,157 @@
+# SQL Agent — docker-compose with three profiles.
+#
+#   Usage:
+#     docker compose up                              # default profile only
+#     docker compose --profile postgres up           # + Postgres DB
+#     docker compose --profile observability up      # + Prometheus & Grafana
+#     docker compose --profile postgres --profile observability up   # combine
+#
+# Phase 8.8 refactor: the previous revision had a fragile "sql-agent-postgres-
+# override" duplicate service. We now use YAML anchors (``x-sql-agent-base``)
+# so the postgres variant reuses the same configuration with a single
+# ``DATABASE_URL`` override.
+
+# Shared base config for the sql-agent service.
+x-sql-agent-base: &sql-agent-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: sql-agent:latest
+  ports:
+    - "50051:50051"   # gRPC
+    - "9090:9090"     # Prometheus /metrics
+  environment: &sql-agent-env
+    LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+    EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-mock}
+    METRICS_ENABLED: ${METRICS_ENABLED:-true}
+    METRICS_PORT: "9090"
+    METRICS_ADDR: "0.0.0.0"
+    LOG_JSON: ${LOG_JSON:-true}
+    TRACKING_ENABLED: ${TRACKING_ENABLED:-true}
+    TRACKING_BACKEND: ${TRACKING_BACKEND:-file}
+    SEED_DEMO_ON_BOOT: ${SEED_DEMO_ON_BOOT:-true}
+    DATABASE_URL: ${DATABASE_URL:-}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  volumes:
+    - sql_agent_data:/app/sql_agent/sqlite_db
+    - sql_agent_logs:/app/logs
+    - sql_agent_applogs:/app/sql_agent/logs
+  healthcheck:
+    test: ["CMD", "grpc_health_probe", "-addr=127.0.0.1:50051"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 20s
+  restart: unless-stopped
+
+
+services:
+  # -------------------------------------------------------------------------
+  # Core: SQLite-backed (default profile).
+  # -------------------------------------------------------------------------
+  sql-agent:
+    <<: *sql-agent-base
+    container_name: sql-agent
+
+  # -------------------------------------------------------------------------
+  # Profile: postgres — swaps SQLite for a real RDBMS.
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: sql-agent-postgres
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: sql_agent
+      POSTGRES_USER: sql_agent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sql_agent -d sql_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  sql-agent-pg:
+    <<: *sql-agent-base
+    container_name: sql-agent-pg
+    profiles: ["postgres"]
+    environment:
+      <<: *sql-agent-env
+      DATABASE_URL: "postgresql+psycopg2://sql_agent:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/sql_agent"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # Profile: observability — Prometheus + Grafana.
+  # -------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: sql-agent-prometheus
+    profiles: ["observability"]
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:11.3.0
+    container_name: sql-agent-grafana
+    profiles: ["observability"]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # Profile: qdrant — shared vector DB (phase 9). Eliminates multi-replica
+  # FAISS divergence. Connect the agent via MEMORY_STORE_BACKEND=qdrant +
+  # QDRANT_URL=http://qdrant:6333.
+  # -------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: sql-agent-qdrant
+    profiles: ["qdrant"]
+    ports:
+      - "6333:6333"   # HTTP API
+      - "6334:6334"   # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  sql-agent-qdrant:
+    <<: *sql-agent-base
+    container_name: sql-agent-qdrant-client
+    profiles: ["qdrant"]
+    environment:
+      <<: *sql-agent-env
+      MEMORY_STORE_BACKEND: "qdrant"
+      QDRANT_URL: "http://qdrant:6333"
+    depends_on:
+      - qdrant
+
+volumes:
+  sql_agent_data:
+  sql_agent_logs:
+  sql_agent_applogs:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  qdrant_data:

@@ -1,0 +1,99 @@
+# Phase 9 — Qdrant shared vector DB for production multi-replica deployments.
+#
+# Deploy this BEFORE switching the sql-agent Deployment to
+# MEMORY_STORE_BACKEND=qdrant. Any number of sql-agent replicas can then
+# safely write to and read from the same memory, eliminating the FAISS
+# divergence problem that Phase 7's READ_ONLY_MEMORY only mitigated.
+#
+# Storage: 10 Gi RWO PVC. Sufficient for ~5M embeddings at 1536 dim.
+# For larger corpora, raise `resources.requests.storage` or use Qdrant's
+# cluster mode (out of scope for this file).
+#
+# This file is NOT in the base kustomization by default — opt in with:
+#   kustomize edit add resource qdrant.yaml
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: memory
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+      app.kubernetes.io/component: memory
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qdrant
+        app.kubernetes.io/component: memory
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.12.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 6333
+            - name: grpc
+              containerPort: 6334
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          livenessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: storage
+              mountPath: /qdrant/storage
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: memory
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: memory
+  ports:
+    - name: http
+      port: 6333
+      targetPort: http
+    - name: grpc
+      port: 6334
+      targetPort: grpc

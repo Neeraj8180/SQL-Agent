@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sql-agent
+  labels:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/part-of: sql-agent-platform

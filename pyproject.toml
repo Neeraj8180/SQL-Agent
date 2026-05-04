@@ -1,0 +1,153 @@
+# ----------------------------------------------------------------------------
+# sql-agent — production-grade multi-agent NL→SQL platform
+#
+# Single source of truth for dependencies. Replaces the five pre-phase-8
+# `requirements-*.txt` files with PEP 621 optional extras.
+#
+# Install patterns:
+#     pip install -e .                     # core only (CLI + Streamlit UI)
+#     pip install -e .[grpc]               # + gRPC gateway
+#     pip install -e .[local-llm]          # + torch + transformers + st
+#     pip install -e .[tracking]           # + mlflow
+#     pip install -e .[observability]      # + prometheus_client
+#     pip install -e .[dev]                # + pytest + pytest-timeout
+#     pip install -e .[all]                # everything above
+# ----------------------------------------------------------------------------
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sql-agent"
+version = "0.2.0"
+description = "Enterprise LLM Platform for Natural Language to SQL Querying"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "SQL Agent Contributors" }]
+
+# ---- Core runtime: CLI, Streamlit UI, orchestrator, tools ------------------
+dependencies = [
+  "langgraph>=1.0,<2.0",
+  "langchain-openai>=1.0,<2.0",
+  "langchain-core>=1.0,<2.0",
+  "openai>=1.50,<3.0",
+  "sqlalchemy>=2.0.30,<3.0",
+  "psycopg2-binary>=2.9.9,<3.0",
+  "pandas>=2.2,<3.0",
+  "matplotlib>=3.9,<4.0",
+  "pydantic>=2.8,<3.0",
+  "pydantic-settings>=2.5,<3.0",
+  "python-dateutil>=2.9,<3.0",
+  "faiss-cpu>=1.8,<2.0",
+  "numpy>=1.26,<3.0",
+  "streamlit>=1.39,<2.0",
+  "python-dotenv>=1.0.1,<2.0",
+  "tenacity>=9.0,<10.0",
+]
+
+[project.optional-dependencies]
+
+# ---- Phase 1: gRPC gateway ------------------------------------------------
+grpc = [
+  "grpcio>=1.60,<2.0",
+  "grpcio-tools>=1.60,<2.0",
+  # Health-check service for grpc_health_probe; pinned to the 1.71.x line
+  # because 1.80+ requires protobuf >= 6 which conflicts with grpcio-tools.
+  "grpcio-health-checking>=1.60,<1.75",
+  "protobuf>=4.25,<6.0",
+]
+
+# ---- Phase 2.3: HuggingFace local models ---------------------------------
+# CPU-friendly by default. For CUDA, override torch via the pytorch index:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+local-llm = [
+  "torch>=2.3,<3.0",
+  "transformers>=4.45,<5.0",
+  "accelerate>=0.30,<2.0",
+  "sentence-transformers>=3.0,<6.0",
+]
+
+# ---- Phase 4: ML lifecycle tracking --------------------------------------
+tracking = [
+  "mlflow>=2.15,<4.0",
+]
+
+# ---- Phase 9: production vector-DB backend for memory --------------------
+# Required only when MEMORY_STORE_BACKEND=qdrant. FAISS is the default and
+# needs nothing extra.
+vector-db = [
+  "qdrant-client>=1.10,<2.0",
+]
+
+# ---- Phase 5: observability ----------------------------------------------
+observability = [
+  "prometheus_client>=0.20,<1.0",
+  # Phase 8.6: basic OpenTelemetry tracing; opt-in via OTEL_ENABLED=true.
+  "opentelemetry-api>=1.30,<2.0",
+  "opentelemetry-sdk>=1.30,<2.0",
+]
+
+# ---- Development / testing ------------------------------------------------
+dev = [
+  "pytest>=8.0,<9.0",
+  "pytest-timeout>=2.3,<3.0",
+  "pyyaml>=6.0,<7.0",
+]
+
+# ---- Meta extras ----------------------------------------------------------
+# [all] installs every optional stack. Use for full-platform dev containers.
+all = [
+  "sql-agent[grpc]",
+  "sql-agent[local-llm]",
+  "sql-agent[tracking]",
+  "sql-agent[observability]",
+  "sql-agent[vector-db]",
+  "sql-agent[dev]",
+]
+
+[project.scripts]
+sql-agent-cli = "sql_agent.main:main"
+sql-agent-grpc = "sql_agent.grpc_server.server:serve"
+
+[project.urls]
+Source = "https://github.com/your-org/sql-agent"
+
+# ---------------------------------------------------------------------------
+# Packaging layout
+# ---------------------------------------------------------------------------
+
+[tool.setuptools]
+# Only the `sql_agent` package; everything under deploy/, scripts/, tests/
+# is excluded from wheels.
+packages = ["sql_agent"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+sql_agent = [
+  "grpc_server/*.proto",
+  "grpc_server/*_pb2.py",
+  "grpc_server/*_pb2_grpc.py",
+  ".env.example",
+]
+
+# ---------------------------------------------------------------------------
+# Tooling config (inlined; no extra files)
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# Phase 8.9: slow tests are excluded by default so the ~2-minute kind test
+# and the multi-minute Qwen model-download tests don't run in every `pytest`
+# invocation. Opt in with:   pytest -m "slow"   or   pytest -m "slow or not slow"
+addopts = "-ra --strict-markers -m 'not slow'"
+timeout = 60
+filterwarnings = [
+  "ignore::UserWarning:pydantic",
+]
+markers = [
+  "slow: mark test as slow (requires large model downloads or spins up a kind cluster)",
+  "gpu: mark test as requiring a CUDA GPU",
+]

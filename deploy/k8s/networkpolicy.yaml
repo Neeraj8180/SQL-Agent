@@ -1,0 +1,45 @@
+# Default-deny inbound + explicit allow for gRPC (50051) and metrics (9090).
+# Phase 8.9: production posture — no pod accepts traffic unless the
+# Service / Ingress explicitly selects it.
+#
+# Requires a CNI plugin that implements NetworkPolicy (Calico, Cilium,
+# Azure CNI in overlay mode, AWS VPC CNI with policy enforcement, etc).
+# Vanilla `kindnet` does NOT enforce NetworkPolicy; it's safe to apply
+# but has no runtime effect in a bare kind cluster. Production clusters
+# typically enforce it.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sql-agent-default-deny
+  namespace: sql-agent
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  # No ingress rules => deny everything by default.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sql-agent-allow-grpc-metrics
+  namespace: sql-agent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sql-agent
+      app.kubernetes.io/component: server
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        # Allow same-namespace pods (e.g., a Gateway / Ingress deployment
+        # also in the sql-agent namespace).
+        - podSelector: {}
+        # Allow observability namespace to scrape /metrics.
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - port: 50051
+          protocol: TCP
+        - port: 9090
+          protocol: TCP

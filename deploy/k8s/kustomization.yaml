@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base manifests. Overlay by creating ./overlays/<env>/kustomization.yaml
+# that references this file and patches images / replicas / env values.
+
+namespace: sql-agent
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - poddisruptionbudget.yaml
+  - networkpolicy.yaml
+  # pvc.yaml is NOT in the base — the Deployment uses emptyDir (phase 8.9).
+  # If you explicitly want a PVC-backed single-replica deployment, add:
+  # - pvc.yaml
+  # Uncomment once you've created a real Secret (see secret.example.yaml):
+  # - secret.yaml
+  #
+  # Uncomment only if your cluster runs the Prometheus Operator:
+  # - servicemonitor.yaml
+  #
+  # Opt-in writer pod for multi-replica FAISS memory writes (phase 8.9):
+  # - statefulset-writer.yaml
+  #
+  # Phase 9: opt-in shared vector DB (eliminates FAISS divergence entirely).
+  # When you add this, also patch the sql-agent ConfigMap with:
+  #   MEMORY_STORE_BACKEND: "qdrant"
+  #   QDRANT_URL: "http://qdrant:6333"
+  # - qdrant.yaml
+
+# `labels` with includeSelectors:false is the kustomize v5+ replacement for
+# deprecated `commonLabels`. Labels are added to every object's metadata but
+# NOT to spec.selector.matchLabels (which must be immutable per k8s rules).
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/name: sql-agent
+      app.kubernetes.io/part-of: sql-agent-platform

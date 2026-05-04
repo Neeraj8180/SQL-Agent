@@ -1,0 +1,144 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# PyInstaller
+*.manifest
+*.spec
+
+# ---------------------------------------------------------------------------
+# Secrets / environment
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------------------------------------------------------------------------
+# Application data (user-specific, should NOT be committed)
+# ---------------------------------------------------------------------------
+# Seeded demo database
+sql_agent/sqlite_db/*.db
+sql_agent/sqlite_db/*.sqlite
+sql_agent/sqlite_db/*.sqlite3
+
+# Persisted chat sessions
+sql_agent/sqlite_db/chat_histories/*.json
+
+# Persisted FAISS indices + sidecars
+sql_agent/sqlite_db/faiss_index/*.index
+sql_agent/sqlite_db/faiss_index/*.jsonl
+sql_agent/sqlite_db/faiss_index/*.tmp
+sql_agent/sqlite_db/faiss_index/dim*/*.index
+sql_agent/sqlite_db/faiss_index/dim*/*.jsonl
+
+# Phase 3 routing decision log (contains session ids).
+# Default location per LLM_ROUTING_DECISION_LOG:
+sql_agent/logs/
+logs/
+# Also catch deprecated paths so old deployments remain gitignored:
+sql_agent/routing/*.jsonl
+sql_agent/routing/*.jsonl.tmp
+routing/*.jsonl
+
+# Phase 4 / 8.3: MLflow tracking artifacts (may contain user queries).
+logs/tracking/
+sql_agent/logs/tracking/
+mlruns/
+mlflow.db
+mlflow.db-shm
+mlflow.db-wal
+
+# Phase 9: embedded Qdrant storage path (when QDRANT_URL is empty).
+sql_agent/sqlite_db/faiss_index/qdrant/
+sql_agent/sqlite_db/faiss_index/dim*/qdrant/
+
+# Phase 8.8: SBOM artifacts (regenerated per release, not versioned).
+artifacts/sbom/
+
+# Ad-hoc rendered K8s output (from scripts/render_k8s.py).
+rendered.yaml
+
+# HuggingFace local cache (if someone symlinks it into the repo).
+.cache/huggingface/
+
+# Generic SQLite files anywhere
+*.db
+*.sqlite
+*.sqlite3
+
+# ---------------------------------------------------------------------------
+# Testing / coverage
+# ---------------------------------------------------------------------------
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+*.cover
+
+# ---------------------------------------------------------------------------
+# Jupyter / notebooks
+# ---------------------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---------------------------------------------------------------------------
+# IDE / editor
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+.history/
+
+# ---------------------------------------------------------------------------
+# OS
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+ehthumbs.db
+
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
+*.log
+logs/

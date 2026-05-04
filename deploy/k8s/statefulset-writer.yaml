@@ -1,0 +1,109 @@
+# StatefulSet for the "writer" pod — Phase 7/8.9 multi-replica memory fix.
+#
+# Why this exists:
+#   The main Deployment (deployment.yaml) runs with READ_ONLY_MEMORY=true
+#   so its HPA-scaled pods never mutate FAISS. Someone has to WRITE new
+#   rewards/penalties, though, or memory is frozen forever. This
+#   StatefulSet runs exactly ONE dedicated writer pod with its own
+#   persistent volume and READ_ONLY_MEMORY=false.
+#
+# Routing pattern in practice:
+#   * Clients send requests to `Service/sql-agent` (the HPA Deployment).
+#   * Reads (plan-only, routine ExecuteSQL) served by any replica.
+#   * Periodic "train on recent successes" jobs (future phase) route to
+#     `Service/sql-agent-writer` which targets this StatefulSet by label.
+#
+# Until write-flow exists, this is OPTIONAL — apply only if you plan to
+# run offline memory updates. It's intentionally NOT in the base
+# kustomization.yaml.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sql-agent-writer
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/component: writer
+spec:
+  serviceName: sql-agent-writer
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sql-agent
+      app.kubernetes.io/component: writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sql-agent
+        app.kubernetes.io/component: writer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: sql-agent
+          image: sql-agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50051
+          envFrom:
+            - configMapRef:
+                name: sql-agent-config
+            - secretRef:
+                name: sql-agent-secrets
+                optional: true
+          env:
+            # Override the ConfigMap: writer pod IS allowed to write memory.
+            - name: READ_ONLY_MEMORY
+              value: "false"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          livenessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          readinessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: writer-data
+              mountPath: /app/sql_agent/sqlite_db
+  volumeClaimTemplates:
+    - metadata:
+        name: writer-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+# Headless service for direct pod-to-pod addressing (writer-0.sql-agent-writer).
+apiVersion: v1
+kind: Service
+metadata:
+  name: sql-agent-writer
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/component: writer
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/component: writer
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc

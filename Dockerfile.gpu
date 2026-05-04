@@ -1,0 +1,117 @@
+# syntax=docker/dockerfile:1.7
+# ============================================================================
+# SQL Agent — GPU image (CUDA 12.4 + torch GPU + local HF models).
+#
+# Target size: ~6 GB. Requires NVIDIA container toolkit on the host and
+# a compatible NVIDIA driver. On Docker Desktop / Windows, enable
+# "Use the WSL 2 based engine" and install the NVIDIA CUDA on WSL driver.
+#
+# Build:
+#   docker build -f Dockerfile.gpu -t sql-agent:gpu .
+#
+# Run:
+#   docker run --rm --gpus all -p 50051:50051 -p 9090:9090 \
+#       -e LLM_PROVIDER=hf -e HF_CHAT_MODEL=Qwen/Qwen2.5-3B-Instruct \
+#       -e EMBEDDING_PROVIDER=hf \
+#       -v hf_cache:/home/sql_agent/.cache/huggingface \
+#       sql-agent:gpu
+#
+# Note: FORCE_GPU=true is NOT set by default; the hardware-detection chain
+# auto-picks CUDA when available, CPU otherwise. This lets the same image
+# run on CPU-only hosts for smoke tests.
+# ============================================================================
+
+ARG CUDA_IMAGE=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+# ---------------------------------------------------------------------------
+# Builder (uses CUDA devel image to install torch with CUDA wheels)
+# ---------------------------------------------------------------------------
+FROM ${CUDA_IMAGE} AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      software-properties-common build-essential git curl ca-certificates \
+ && add-apt-repository ppa:deadsnakes/ppa -y \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      python3.11 python3.11-venv python3.11-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN python3.11 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY pyproject.toml /build/pyproject.toml
+COPY sql_agent/__init__.py /build/sql_agent/__init__.py
+
+# Install CUDA torch FIRST so the subsequent .[local-llm] resolution picks
+# it up instead of pulling CPU torch from PyPI.
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+ && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu124 \
+      "torch>=2.3,<3.0" \
+ && pip install --no-cache-dir ".[grpc,local-llm,tracking,observability]" \
+ && pip freeze > /opt/venv/requirements.lock
+
+COPY sql_agent /build/sql_agent
+COPY scripts /build/scripts
+
+RUN pip install --no-cache-dir --no-deps -e "."
+
+# ---------------------------------------------------------------------------
+# Final (CUDA runtime, smaller than devel)
+# ---------------------------------------------------------------------------
+FROM ${CUDA_IMAGE} AS final
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      software-properties-common ca-certificates curl \
+ && add-apt-repository ppa:deadsnakes/ppa -y \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends python3.11 \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -sf /usr/bin/python3.11 /usr/local/bin/python
+
+ARG GRPC_HEALTH_PROBE_VERSION=v0.4.38
+ADD --chmod=0755 https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-amd64 \
+    /usr/local/bin/grpc_health_probe
+
+RUN groupadd --system --gid 10001 sql_agent \
+ && useradd --system --uid 10001 --gid 10001 --home-dir /home/sql_agent --shell /sbin/nologin sql_agent \
+ && mkdir -p /home/sql_agent/.cache/huggingface \
+ && chown -R sql_agent:sql_agent /home/sql_agent
+
+WORKDIR /app
+
+# --chown avoids a multi-GB duplicate layer (torch with CUDA is 4+ GB).
+COPY --from=builder --chown=sql_agent:sql_agent /opt/venv /opt/venv
+COPY --from=builder --chown=sql_agent:sql_agent /build/sql_agent /app/sql_agent
+COPY --from=builder --chown=sql_agent:sql_agent /build/scripts /app/scripts
+
+RUN mkdir -p /app/sql_agent/sqlite_db \
+             /app/sql_agent/logs \
+             /app/logs \
+ && chown sql_agent:sql_agent /app/sql_agent/sqlite_db \
+                              /app/sql_agent/logs \
+                              /app/logs
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    GRPC_PORT=50051 \
+    METRICS_PORT=9090 \
+    HF_HOME=/home/sql_agent/.cache/huggingface
+
+USER sql_agent
+
+EXPOSE 50051 9090
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD grpc_health_probe -addr=127.0.0.1:${GRPC_PORT} || exit 1
+
+ENTRYPOINT ["python", "scripts/run_grpc_server.py"]
+CMD []

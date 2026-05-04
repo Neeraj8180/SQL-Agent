@@ -1,0 +1,14 @@
+# PodDisruptionBudget: ensure at least one pod remains available during
+# voluntary disruptions (node drains, upgrades). With HPA minReplicas=2
+# and maxUnavailable=1, the upgrade is always safe.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sql-agent
+  namespace: sql-agent
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sql-agent
+      app.kubernetes.io/component: server

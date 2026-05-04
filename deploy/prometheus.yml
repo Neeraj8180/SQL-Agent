@@ -1,0 +1,17 @@
+# Prometheus scrape config for docker-compose observability profile.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "sql-agent"
+    static_configs:
+      - targets: ["sql-agent:9090"]
+        labels:
+          service: "sql-agent"
+          environment: "local"
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

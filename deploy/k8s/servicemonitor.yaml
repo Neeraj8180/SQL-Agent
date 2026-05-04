@@ -1,0 +1,32 @@
+# ServiceMonitor: enables Prometheus Operator to scrape sql-agent pods.
+#
+# ONLY APPLY THIS IF YOUR CLUSTER HAS THE PROMETHEUS OPERATOR INSTALLED.
+# If you don't have the Operator, remove this file from the kustomization
+# — `kubectl apply -f servicemonitor.yaml` will fail with
+# "no matches for kind ServiceMonitor" on clusters without the CRD.
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sql-agent
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: sql-agent
+    # Match whatever label selector your Prometheus Operator watches. Most
+    # installations use `release: prometheus` or similar — adjust in
+    # overlay if needed.
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - sql-agent
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sql-agent
+      app.kubernetes.io/component: server
+  endpoints:
+    - port: metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      path: /metrics
+      scheme: http

@@ -1,0 +1,63 @@
+# Build context exclusions — keeps the context small and reproducible.
+
+# Python bytecode and caches
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments (MUST NOT be copied into the image)
+.venv/
+venv/
+env/
+ENV/
+
+# Editor / IDE
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Existing stateful data (images start fresh)
+sql_agent/sqlite_db/*.db
+sql_agent/sqlite_db/*.sqlite
+sql_agent/sqlite_db/*.sqlite3
+sql_agent/sqlite_db/chat_histories/*.json
+sql_agent/sqlite_db/faiss_index/**
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs and tracking outputs (produced at runtime)
+logs/
+sql_agent/logs/
+sql_agent/routing/*.jsonl
+routing/*.jsonl
+
+# Dev-time scripts that shouldn't be baked in
+scripts/_phase0_smoke.py
+
+# Docs and non-code files that bloat context unnecessarily
+README.md
+*.ipynb
+
+# Docker files themselves (except the one being built)
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# Platform artifacts
+.DS_Store
+Thumbs.db
+desktop.ini

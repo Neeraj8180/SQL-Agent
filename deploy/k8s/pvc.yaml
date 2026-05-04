@@ -1,0 +1,36 @@
+# PersistentVolumeClaim for per-pod data (SQLite demo DB + FAISS memory).
+#
+# NOTES:
+#   * ReadWriteOnce (RWO) is correct for a single-writer Deployment. Multi-
+#     replica Deployments with this PVC are INCORRECT: two pods cannot
+#     mount RWO simultaneously on most clusters. For HPA with >1 replica,
+#     either:
+#       (a) Remove this PVC and use emptyDir in the Deployment (pods are
+#           stateless; reward-memory writes are disabled by
+#           READ_ONLY_MEMORY=true anyway).
+#       (b) Use a ReadWriteMany PVC (requires NFS / EFS / Azure Files) so
+#           all readers see the same memory.
+#       (c) Convert the writer pod to a StatefulSet with its own RWO PVC,
+#           and keep the Deployment pods on emptyDir + READ_ONLY_MEMORY.
+#
+#   * Production with an external DATABASE_URL (Postgres/MySQL) doesn't
+#     need this PVC at all — the SQLite path is unused.
+#
+# This file is intentionally small and generic; the storageClassName is
+# left unset so it uses the cluster default. Override in your overlay.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sql-agent-data
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/component: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: "standard"   # uncomment and set per cluster

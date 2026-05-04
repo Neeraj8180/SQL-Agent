@@ -1,0 +1,103 @@
+# syntax=docker/dockerfile:1.7
+# ============================================================================
+# SQL Agent — local-LLM image (CPU torch + transformers + mlflow + prometheus).
+#
+# Target size: ~3 GB. Supports:
+#   * LLM_PROVIDER=hf with Qwen/SmolLM/… on CPU
+#   * EMBEDDING_PROVIDER=hf with sentence-transformers
+#   * Full tracking (MLflow file backend) and Prometheus metrics
+#
+# Build:
+#   docker build -f Dockerfile.local-llm -t sql-agent:local-llm .
+#
+# Run:
+#   docker run --rm -p 50051:50051 -p 9090:9090 \
+#       -e LLM_PROVIDER=hf -e HF_CHAT_MODEL=HuggingFaceTB/SmolLM2-135M-Instruct \
+#       -e EMBEDDING_PROVIDER=hf \
+#       -e TRACKING_ENABLED=true -e METRICS_ENABLED=true \
+#       -v hf_cache:/home/sql_agent/.cache/huggingface \
+#       sql-agent:local-llm
+# ============================================================================
+
+ARG PYTHON_IMAGE=python:3.11.9-slim-bookworm
+
+# ---------------------------------------------------------------------------
+# Builder
+# ---------------------------------------------------------------------------
+FROM ${PYTHON_IMAGE} AS builder
+
+# All deps publish manylinux wheels (including torch CPU, transformers,
+# sentence-transformers) so we skip apt entirely. This avoids depending on
+# the Debian mirror being reachable from the build environment.
+
+WORKDIR /build
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY pyproject.toml /build/pyproject.toml
+COPY sql_agent/__init__.py /build/sql_agent/__init__.py
+
+# Install all extras. Torch 2.3+ ships CPU-capable manylinux wheels on
+# PyPI by default, so we don't need the PyTorch CPU extra-index — which
+# also sidesteps SSL interception some corporate proxies apply to the
+# PyTorch R2 CDN. If you explicitly want the CPU-only torch build (saves
+# ~800 MB vs the default CUDA-capable wheel), set
+# ``PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu`` in your
+# build environment and pip will prefer that index automatically.
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+ && pip install --no-cache-dir ".[grpc,local-llm,tracking,observability]" \
+ && pip freeze > /opt/venv/requirements.lock
+
+COPY sql_agent /build/sql_agent
+COPY scripts /build/scripts
+
+RUN pip install --no-cache-dir --no-deps -e "."
+
+# ---------------------------------------------------------------------------
+# Final
+# ---------------------------------------------------------------------------
+FROM ${PYTHON_IMAGE} AS final
+
+# ca-certificates comes preinstalled in python:*-slim-bookworm.
+
+ARG GRPC_HEALTH_PROBE_VERSION=v0.4.38
+ADD --chmod=0755 https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-amd64 \
+    /usr/local/bin/grpc_health_probe
+
+RUN groupadd --system --gid 10001 sql_agent \
+ && useradd --system --uid 10001 --gid 10001 --home-dir /home/sql_agent --shell /sbin/nologin sql_agent \
+ && mkdir -p /home/sql_agent/.cache/huggingface \
+ && chown -R sql_agent:sql_agent /home/sql_agent
+
+WORKDIR /app
+
+# --chown avoids a ~2 GB duplicate layer that a subsequent RUN chown -R
+# would produce (torch + transformers are massive).
+COPY --from=builder --chown=sql_agent:sql_agent /opt/venv /opt/venv
+COPY --from=builder --chown=sql_agent:sql_agent /build/sql_agent /app/sql_agent
+COPY --from=builder --chown=sql_agent:sql_agent /build/scripts /app/scripts
+
+RUN mkdir -p /app/sql_agent/sqlite_db \
+             /app/sql_agent/logs \
+             /app/logs \
+ && chown sql_agent:sql_agent /app/sql_agent/sqlite_db \
+                              /app/sql_agent/logs \
+                              /app/logs
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    GRPC_PORT=50051 \
+    METRICS_PORT=9090 \
+    HF_HOME=/home/sql_agent/.cache/huggingface
+
+USER sql_agent
+
+EXPOSE 50051 9090
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD grpc_health_probe -addr=127.0.0.1:${GRPC_PORT} || exit 1
+
+ENTRYPOINT ["python", "scripts/run_grpc_server.py"]
+CMD []

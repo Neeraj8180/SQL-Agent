@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sql-agent
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/component: server
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+---
+# Headless variant for workloads that want direct pod-to-pod addressing
+# (e.g. a future StatefulSet with one writer pod + N readers).
+apiVersion: v1
+kind: Service
+metadata:
+  name: sql-agent-headless
+  namespace: sql-agent
+  labels:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/component: server-headless
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app.kubernetes.io/name: sql-agent
+    app.kubernetes.io/component: server
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+      protocol: TCP
